@@ -1,4 +1,4 @@
-name: colx_531
+name: tcob
 channels:
   - conda-forge
 dependencies:
