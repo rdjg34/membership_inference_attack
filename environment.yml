@@ -12,3 +12,7 @@ dependencies:
   - jupyterlab-spellchecker
   - matplotlib
   - nltk
+  - datasets
+  - transformers
+  - pytorch
+  - tabulate
