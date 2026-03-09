@@ -73,4 +73,4 @@ By signing below, we agree to uphold this contract and support each other throug
 | Jennifer | Jennifer Flake | March 8, 2026  |
 | Yucai |  | |
 | Christina |  |  |
-| Rachelle |  |  |
+| Rachelle | RDJ |March 8, 2026  |
