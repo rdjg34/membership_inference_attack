@@ -70,7 +70,7 @@ By signing below, we agree to uphold this contract and support each other throug
 
 | Name | Signature | Date |
 |------|-----------|------|
-| Jennifer | |  |
+| Jennifer | Jennifer Flake | March 8, 2026  |
 | Yucai |  | |
 | Christina |  |  |
 | Rachelle |  |  |
