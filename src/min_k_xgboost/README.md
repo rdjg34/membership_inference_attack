@@ -1,0 +1,1 @@
+This folder contains all of the code for the Milestone 2 model `milestone2/min_k_xgboost`. To run the full pipeline, type "python main.py" in your terminal after installing the necessary dependencies in `requirements.txt`. For the full walk-through of the model training and evaluation process used (in Colab), please see the `min_k_xgboost.ipynb` file.
