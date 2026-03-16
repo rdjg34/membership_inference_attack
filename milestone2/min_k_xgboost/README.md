@@ -1,1 +1,0 @@
-This folder contains the predictions from the min_k_xgboost model, `min_k_xgboost.csv`. For the full code, see the main `src` folder.
