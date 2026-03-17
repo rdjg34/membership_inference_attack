@@ -79,7 +79,7 @@ def compute_perplexity_and_features(model, tokenizer, text, max_length=512,
         k30 = max(1, int(n_tokens * 0.30))
         min_k30_prob = sorted_probs[:, :k30].mean().item()
 
-    # HT-MIA (Hypothesis Testing Membership Inference Attack)
+    # HT-MIA (Hard Token Membership Inference Attack)
     # This approach is from
     # Raw perplexity is a noisy membership signal because some text is simply
     # easier or harder to predict regardless of whether the model was trained on
