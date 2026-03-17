@@ -1,0 +1,11 @@
+torch
+transformers
+datasets
+huggingface_hub
+wandb
+scikit-learn
+xgboost
+pandas
+numpy
+tqdm
+sentencepiece
