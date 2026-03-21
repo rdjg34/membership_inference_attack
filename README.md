@@ -20,7 +20,13 @@
   |   |
 |  |  |
 
-
+## Milestone 3
+| Document | Location |
+|----------------------|-------------------|
+| Report | [`milestone3/TCOB_Milestone_3.pdf`](milestone3/TCOB_Milestone_3.pdf) |
+ Final Kaggle Submission | [`milestone3/membership_inference_submission_TCOB_model6_run2.csv`](milestone3/membership_inference_submission_TCOB_model6_run2.csv)  |
+| Model 5 source code | [`src/model5`](src/model5)  |
+| Model 6 source code | [`src/model6`](src/model6)   |
 
 ## Conda environment setup
 
