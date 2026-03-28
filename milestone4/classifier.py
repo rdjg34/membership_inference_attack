@@ -1,20 +1,12 @@
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score, roc_curve
 from sklearn.preprocessing import StandardScaler
 from xgboost import XGBClassifier
 
 
-FEATURE_COLS = [
-    "loss", "caption_loss",
-    "mean_token_prob", "min_token_prob", "max_token_prob", "std_token_prob",
-    "mean_entropy", "top_k_mass", "low_conf_ratio",
-    "min_k10_prob", "min_k20_prob", "min_k30_prob",
-    "min_k10_pp",   "min_k20_pp",   "min_k30_pp",
-]
-
+# ─── Helpers ────────────────────────────────────────────────────────────────────
 
 def _clean(X: pd.DataFrame, medians=None):
     X = X.replace([np.inf, -np.inf], np.nan)
@@ -23,131 +15,170 @@ def _clean(X: pd.DataFrame, medians=None):
     return X.fillna(medians).fillna(0), medians
 
 
+def _get_feature_cols(df: pd.DataFrame) -> list:
+    """Auto-detect all numeric feature columns (exclude meta columns)."""
+    exclude = {"label", "id", "is_member"}
+    cols = [
+        c for c in df.columns
+        if c not in exclude and df[c].dtype in [np.float64, np.float32, np.int64, np.int32, float, int]
+    ]
+    cols = [c for c in cols if df[c].nunique() > 1]
+    return cols
+
+
+# ─── Main Builder ───────────────────────────────────────────────────────────────
+
 def build_membership_classifier(train_df: pd.DataFrame, val_df: pd.DataFrame) -> dict:
     """
-    Train an ensemble of classifiers on train_df, evaluate on val_df.
-
-    Returns: dict mapping classifier name → result dict
+    Simple baseline: Logistic Regression + XGBoost on all available features.
     """
-    feat_cols = FEATURE_COLS
-    X_train, medians = _clean(train_df[feat_cols].copy())
-    X_val,   _       = _clean(val_df[feat_cols].copy(), medians)
     y_train = train_df["label"]
-    y_val   = val_df["label"]
+    y_val = val_df["label"]
+    pos_weight = max(1.0, float((y_train == 0).sum()) / max(1, int((y_train == 1).sum())))
 
-    print(f"Features: {len(feat_cols)}  |  Train: {len(X_train)}  |  Val: {len(X_val)}")
+    feat_cols = _get_feature_cols(train_df)
+    print(f"Features: {len(feat_cols)}  |  Train: {len(train_df)}  |  Val: {len(val_df)}")
 
-    scaler       = StandardScaler()
-    X_train_sc   = scaler.fit_transform(X_train)
-    X_val_sc     = scaler.transform(X_val)
+    X_train_raw, medians = _clean(train_df[feat_cols].copy())
+    X_val_raw, _ = _clean(val_df[feat_cols].copy(), medians)
 
-    classifiers = {
-        "Logistic Regression": LogisticRegression(random_state=42, max_iter=1000),
-        "Random Forest":       RandomForestClassifier(n_estimators=100, random_state=42),
-        "XGBoost": XGBClassifier(
-            n_estimators=500, learning_rate=0.02, max_depth=5,
-            subsample=0.8, colsample_bytree=0.8, min_child_weight=3,
-            eval_metric="logloss", random_state=42,
-        ),
-        "Gradient Boosting":   GradientBoostingClassifier(random_state=42),
-    }
+    # Show individual feature AUCs (for debugging)
+    print("\nIndividual feature AUCs (top 10):")
+    aucs = []
+    for col in feat_cols:
+        try:
+            auc = roc_auc_score(y_train, X_train_raw[col])
+            aucs.append((col, max(auc, 1 - auc)))
+        except Exception:
+            pass
+    aucs.sort(key=lambda x: -x[1])
+    for col, auc in aucs[:10]:
+        print(f"  {col:30s}  AUC={auc:.4f}")
 
+    # Standardize
+    scaler = StandardScaler()
+    X_train_sc = scaler.fit_transform(X_train_raw)
+    X_val_sc = scaler.transform(X_val_raw)
+
+    # ── Train classifiers ────────────────────────────────────────────────────
     results = {}
-    for name, clf in classifiers.items():
-        print(f"\nTraining {name}...")
-        if name == "Logistic Regression":
-            clf.fit(X_train_sc, y_train)
-            proba = clf.predict_proba(X_val_sc)[:, 1]
-        else:
-            clf.fit(X_train, y_train)
-            proba = clf.predict_proba(X_val)[:, 1]
+    val_probas = {}
 
-        auc = roc_auc_score(y_val, proba)
-        fpr, tpr, _ = roc_curve(y_val, proba)
-        tpr_at_fpr01 = tpr[np.argmin(np.abs(fpr - 0.1))]
-        acc = ((proba > 0.5).astype(int) == y_val).mean()
-        print(f"  AUC={auc:.4f}  TPR@FPR=0.1={tpr_at_fpr01:.4f}  Acc={acc:.4f}")
+    # 1. Logistic Regression (simple baseline)
+    print("\nTraining Logistic Regression...")
+    lr = LogisticRegression(
+        random_state=42, max_iter=5000,
+        class_weight="balanced", C=1.0, solver="lbfgs",
+    )
+    lr.fit(X_train_sc, y_train)
+    lr_proba = lr.predict_proba(X_val_sc)[:, 1]
+    lr_auc = roc_auc_score(y_val, lr_proba)
+    fpr, tpr, _ = roc_curve(y_val, lr_proba)
+    lr_tpr = tpr[np.argmin(np.abs(fpr - 0.1))]
+    print(f"  AUC={lr_auc:.4f}  TPR@FPR=0.1={lr_tpr:.4f}")
 
-        if name in ("Random Forest", "XGBoost", "Gradient Boosting"):
-            imp = pd.DataFrame({"feature": feat_cols,
-                                "importance": clf.feature_importances_}
-                               ).sort_values("importance", ascending=False)
-            print(f"  Top-5: {imp['feature'].head(5).tolist()}")
+    results["Logistic Regression"] = {
+        "classifier": lr, "scaler": scaler,
+        "feat_cols": feat_cols, "medians": medians,
+        "auc": lr_auc, "tpr_at_fpr01": lr_tpr,
+        "val_proba": lr_proba,
+    }
+    val_probas["Logistic Regression"] = lr_proba
 
-        results[name] = {
-            "classifier":    clf,
-            "scaler":        scaler if name == "Logistic Regression" else None,
-            "feat_cols":     feat_cols,
-            "medians":       medians,
-            "auc":           auc,
-            "tpr_at_fpr01":  tpr_at_fpr01,
-            "accuracy":      acc,
-            "val_proba":     proba,
-        }
+    # 2. XGBoost
+    print("\nTraining XGBoost...")
+    xgb = XGBClassifier(
+        n_estimators=500, learning_rate=0.01, max_depth=3,
+        subsample=0.8, colsample_bytree=0.8,
+        scale_pos_weight=pos_weight, eval_metric="auc",
+        random_state=42, reg_alpha=0.5, reg_lambda=2.0,
+    )
+    xgb.fit(X_train_raw.values, y_train)
+    xgb_proba = xgb.predict_proba(X_val_raw.values)[:, 1]
+    xgb_auc = roc_auc_score(y_val, xgb_proba)
+    fpr, tpr, _ = roc_curve(y_val, xgb_proba)
+    xgb_tpr = tpr[np.argmin(np.abs(fpr - 0.1))]
+    print(f"  AUC={xgb_auc:.4f}  TPR@FPR=0.1={xgb_tpr:.4f}")
 
-    # Soft-voting ensemble weighted by val AUC
-    print("\nBuilding weighted ensemble...")
-    names  = ["XGBoost", "Random Forest", "Logistic Regression", "Gradient Boosting"]
-    probas = np.column_stack([results[n]["val_proba"] for n in names])
-    aucs   = np.array([results[n]["auc"] for n in names])
-    weights = aucs / aucs.sum()
-    print("  Weights: " + "  ".join(f"{n}={w:.3f}" for n, w in zip(names, weights)))
+    if hasattr(xgb, "feature_importances_"):
+        imp = pd.DataFrame(
+            {"feature": feat_cols, "importance": xgb.feature_importances_}
+        ).sort_values("importance", ascending=False)
+        print(f"  Top-5: {imp['feature'].head(5).tolist()}")
 
-    ens_proba = np.average(probas, weights=weights, axis=1)
-    ens_auc   = roc_auc_score(y_val, ens_proba)
+    results["XGBoost"] = {
+        "classifier": xgb, "scaler": None,
+        "feat_cols": feat_cols, "medians": medians,
+        "auc": xgb_auc, "tpr_at_fpr01": xgb_tpr,
+        "val_proba": xgb_proba,
+    }
+    val_probas["XGBoost"] = xgb_proba
+
+    # 3. Simple average ensemble
+    print("\nBuilding ensemble (simple average)...")
+    ens_proba = (lr_proba + xgb_proba) / 2
+    ens_auc = roc_auc_score(y_val, ens_proba)
     fpr, tpr, _ = roc_curve(y_val, ens_proba)
-    ens_tpr   = tpr[np.argmin(np.abs(fpr - 0.1))]
-    ens_acc   = ((ens_proba > 0.5).astype(int) == y_val).mean()
-    print(f"  AUC={ens_auc:.4f}  TPR@FPR=0.1={ens_tpr:.4f}  Acc={ens_acc:.4f}")
+    ens_tpr = tpr[np.argmin(np.abs(fpr - 0.1))]
+    print(f"  AUC={ens_auc:.4f}  TPR@FPR=0.1={ens_tpr:.4f}")
 
     results["Ensemble"] = {
-        "classifier": None,
-        "scaler":     None,
-        "feat_cols":  feat_cols,
-        "medians":    medians,
-        "auc":        ens_auc,
-        "tpr_at_fpr01": ens_tpr,
-        "accuracy":   ens_acc,
-        "val_proba":  ens_proba,
-        "base_classifiers": {n: results[n] for n in names},
+        "classifier": None, "scaler": scaler,
+        "feat_cols": feat_cols, "medians": medians,
+        "auc": ens_auc, "tpr_at_fpr01": ens_tpr,
+        "val_proba": ens_proba,
+        "sub_results": {n: results[n] for n in ["Logistic Regression", "XGBoost"]},
     }
+
+    # ── Summary ─────────────────────────────────────────────────────────────
+    print("\n── Summary ──")
+    for name, r in results.items():
+        print(f"{name:25s}  AUC={r['auc']:.4f}  TPR@FPR=0.1={r['tpr_at_fpr01']:.4f}")
+
+    best_name = max(results, key=lambda x: results[x]["auc"])
+    print(f"\nBest: {best_name}  AUC={results[best_name]['auc']:.4f}")
 
     return results
 
 
+# ─── Prediction ─────────────────────────────────────────────────────────────────
+
 def _predict(clf_result: dict, X: pd.DataFrame) -> np.ndarray:
     """Generate probabilities from a single classifier result dict."""
     feat_cols = clf_result["feat_cols"]
-    X, _ = _clean(X[feat_cols].copy(), clf_result["medians"])
-    if clf_result["scaler"] is not None:
-        X = clf_result["scaler"].transform(X)
-    return clf_result["classifier"].predict_proba(X)[:, 1]
+    X_raw, _ = _clean(X[feat_cols].copy(), clf_result["medians"])
 
-
-def generate_submission(test_df: pd.DataFrame, features_df: pd.DataFrame,
-                        best_result: dict, output_path="submission.csv") -> pd.DataFrame:
-    """
-    Generate Kaggle submission CSV from test features.
-
-    Args:
-        test_df:      Original test split DataFrame (must have 'id' column).
-        features_df:  Feature DataFrame for the test set.
-        best_result:  Classifier result dict (from build_membership_classifier).
-        output_path:  Where to save the CSV.
-
-    Returns: submission DataFrame
-    """
-    if best_result["classifier"] is None:
-        # Ensemble: average base classifier predictions
-        base = best_result["base_classifiers"]
-        probas = np.column_stack([_predict(base[n], features_df)
-                                  for n in base])
-        predictions = probas.mean(axis=1)
+    if clf_result.get("sub_results"):
+        # Ensemble: simple average
+        probas = np.zeros(len(X_raw))
+        n_models = 0
+        for name, sub in clf_result["sub_results"].items():
+            if sub.get("scaler") is not None:
+                X_sc = sub["scaler"].transform(X_raw)
+                p = sub["classifier"].predict_proba(X_sc)[:, 1]
+            else:
+                p = sub["classifier"].predict_proba(X_raw.values)[:, 1]
+            probas += p
+            n_models += 1
+        return probas / n_models
+    elif clf_result["scaler"] is not None:
+        X_sc = clf_result["scaler"].transform(X_raw)
+        return clf_result["classifier"].predict_proba(X_sc)[:, 1]
     else:
-        predictions = _predict(best_result, features_df)
+        return clf_result["classifier"].predict_proba(X_raw.values)[:, 1]
+
+
+def generate_submission(
+    test_df: pd.DataFrame,
+    features_df: pd.DataFrame,
+    best_result: dict,
+    output_path="submission.csv",
+) -> pd.DataFrame:
+    """Generate Kaggle submission CSV from test features."""
+    predictions = _predict(best_result, features_df)
 
     submission = pd.DataFrame({
-        "id":        test_df["id"].tolist(),
+        "id": test_df["id"].tolist(),
         "is_member": predictions,
     })
     submission.to_csv(output_path, index=False)

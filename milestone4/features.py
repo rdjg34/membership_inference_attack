@@ -1,5 +1,4 @@
 import io
-
 import torch
 import torch.nn.functional as F
 from PIL import Image
@@ -7,36 +6,35 @@ from PIL import Image
 
 def _load_image(raw_image) -> Image.Image:
     if isinstance(raw_image, dict) and "bytes" in raw_image:
-        return Image.open(io.BytesIO(raw_image["bytes"])).convert("RGB")
-    return raw_image.convert("RGB")
+        img = Image.open(io.BytesIO(raw_image["bytes"])).convert("RGB")
+    else:
+        img = raw_image.convert("RGB")
+    return img
 
 
 def _prepare_inputs(processor, image: Image.Image, text: str, device: torch.device):
     """
     Split text into user prompt / assistant caption, apply chat template,
-    and return (inputs, prompt_len) where prompt_len is the number of
-    tokens before the assistant caption begins.
+    and return (inputs, prompt_len).
     """
     parts = text.split("\n", 1)
     user_text      = parts[0]
     assistant_text = parts[1] if len(parts) > 1 else ""
 
-    # Full sequence: user + assistant
     messages_full = [
         {"role": "user",      "content": [{"type": "image"}, {"type": "text", "text": user_text}]},
         {"role": "assistant", "content": [{"type": "text",  "text": assistant_text}]},
     ]
     full_text = processor.apply_chat_template(messages_full, tokenize=False)
-    inputs = processor(text=full_text, images=[image], return_tensors="pt").to(device)
+    inputs = processor(text=full_text, images=[image], return_tensors="pt")
 
-    # Cast float tensors for bfloat16 devices
-    if device.type == "cuda":
-        inputs = {
-            k: v.to(torch.bfloat16) if v.dtype == torch.float32 else v
-            for k, v in inputs.items()
-        }
+    inputs = {
+        k: v.to(device=device, dtype=torch.bfloat16)
+           if v.is_floating_point()
+           else v.to(device=device)
+        for k, v in inputs.items()
+    }
 
-    # Prompt-only sequence (to find where caption tokens begin)
     messages_prompt = [
         {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": user_text}]},
     ]
@@ -49,105 +47,126 @@ def _prepare_inputs(processor, image: Image.Image, text: str, device: torch.devi
     return inputs, prompt_len
 
 
-def compute_vlm_features(model, processor, raw_image, text: str):
+def _compute_loss_features(model, processor, inputs, prompt_len):
     """
-    Compute loss-based and token-level features for membership inference.
-
-    Args:
-        model:      Fine-tuned SmolVLM target model.
-        processor:  AutoProcessor for the model.
-        raw_image:  PIL Image or HuggingFace image dict.
-        text:       Raw text string from the dataset (user\\nassistant format).
-
-    Returns:
-        dict of features
+    Core loss and token-probability features from a single model.
+    Returns a dict of features.
     """
     device = next(model.parameters()).device
-    image  = _load_image(raw_image)
-    inputs, prompt_len = _prepare_inputs(processor, image, text, device)
 
-    # ── Full-sequence labels (mask padding) ──────────────────────────────────
-    full_labels = inputs["input_ids"].clone()
-    full_labels[full_labels == processor.tokenizer.pad_token_id] = -100
-
-    # ── Caption-only labels (mask prompt + padding) ──────────────────────────
+    # Caption-only labels (mask prompt + padding)
     caption_labels = inputs["input_ids"].clone()
     caption_labels[:, :prompt_len] = -100
     caption_labels[caption_labels == processor.tokenizer.pad_token_id] = -100
 
     with torch.no_grad():
-        out_full    = model(**inputs, labels=full_labels)
-        out_caption = model(**inputs, labels=caption_labels)
-
-        loss         = out_full.loss.item()
-        caption_loss = out_caption.loss.item()
+        out = model(**inputs, labels=caption_labels)
+        caption_loss = out.loss.item()
+        caption_perplexity = torch.exp(out.loss.detach()).item()
 
         # Per-token probabilities (caption tokens only)
-        logits       = out_full.logits
+        logits = out.logits
         shift_logits = logits[..., :-1, :]
         shift_labels = inputs["input_ids"][..., 1:]
 
         token_probs = F.softmax(shift_logits, dim=-1)
-        actual_token_probs = token_probs.gather(2, shift_labels.unsqueeze(-1)).squeeze(-1)
+        actual_token_probs = token_probs.gather(
+            2, shift_labels.unsqueeze(-1)
+        ).squeeze(-1)
 
-        # Restrict stats to caption tokens
-        cap_mask = (caption_labels[..., 1:] != -100)  # (1, seq-1)
+        cap_mask = (caption_labels[..., 1:] != -100)
         if cap_mask.sum() == 0:
-            # fallback to full sequence if caption detection failed
-            cap_mask = (full_labels[..., 1:] != -100)
+            cap_mask = torch.ones_like(caption_labels[..., 1:], dtype=torch.bool)
 
-        cap_probs = actual_token_probs[cap_mask]  # (n_cap_tokens,)
+        cap_probs = actual_token_probs[cap_mask].to(device=device, dtype=torch.float32)
+        caption_length = int(cap_probs.numel())
 
+        # Basic probability stats
         mean_token_prob = cap_probs.mean().item()
-        min_token_prob  = cap_probs.min().item()
-        max_token_prob  = cap_probs.max().item()
         std_token_prob  = cap_probs.std().item()
+        min_token_prob  = cap_probs.min().item()
 
-        # Entropy (over full vocab at each caption position)
-        cap_full_dist = token_probs[0][cap_mask[0]]          # (n_cap, vocab)
+        # Min-K% (most uncertain tokens — key signal for MIA)
+        sorted_probs = cap_probs.sort().values
+        n = sorted_probs.shape[0]
+        k10 = max(1, int(n * 0.10))
+        k20 = max(1, int(n * 0.20))
+        min_k10_prob = sorted_probs[:k10].mean().item()
+        min_k20_prob = sorted_probs[:k20].mean().item()
+
+        # Entropy
+        cap_full_dist = token_probs[0][cap_mask[0]].to(device=device, dtype=torch.float32)
         token_entropies = -(cap_full_dist * torch.log(cap_full_dist + 1e-10)).sum(dim=-1)
         mean_entropy = token_entropies.mean().item()
 
-        top_k_probs, _ = torch.topk(cap_full_dist, k=min(10, cap_full_dist.shape[-1]), dim=-1)
-        top_k_mass = top_k_probs.sum(dim=-1).mean().item()
+    return {
+        "caption_loss": caption_loss,
+        "caption_perplexity": caption_perplexity,
+        "caption_length": caption_length,
+        "mean_token_prob": mean_token_prob,
+        "std_token_prob": std_token_prob,
+        "min_token_prob": min_token_prob,
+        "min_k10_prob": min_k10_prob,
+        "min_k20_prob": min_k20_prob,
+        "mean_entropy": mean_entropy,
+    }
 
-        low_conf_ratio = (cap_probs < 0.1).float().mean().item()
 
-        # Min-K%
-        sorted_probs = cap_probs.sort().values  # ascending
-        n_tokens = sorted_probs.shape[0]
-        k10 = max(1, int(n_tokens * 0.10))
-        k20 = max(1, int(n_tokens * 0.20))
-        k30 = max(1, int(n_tokens * 0.30))
-        min_k10_prob = sorted_probs[:k10].mean().item()
-        min_k20_prob = sorted_probs[:k20].mean().item()
-        min_k30_prob = sorted_probs[:k30].mean().item()
+def compute_vlm_features(model, processor, raw_image, text: str):
+    """
+    Compute features from the fine-tuned (target) model.
+    """
+    device = next(model.parameters()).device
+    image  = _load_image(raw_image)
+    inputs, prompt_len = _prepare_inputs(processor, image, text, device)
+    feats = _compute_loss_features(model, processor, inputs, prompt_len)
+    # Prefix nothing — these are "target" features
+    return feats
 
-        # Min-K%++
-        actual_log_probs = torch.log(cap_probs + 1e-10)
-        log_probs_vocab  = torch.log(cap_full_dist + 1e-10)
-        mu    = log_probs_vocab.mean(dim=-1)
-        sigma = log_probs_vocab.std(dim=-1)
-        normalized_scores = (actual_log_probs - mu) / (sigma + 1e-10)
-        sorted_normalized = normalized_scores.sort().values
-        min_k10_pp = sorted_normalized[:k10].mean().item()
-        min_k20_pp = sorted_normalized[:k20].mean().item()
-        min_k30_pp = sorted_normalized[:k30].mean().item()
+
+def compute_reference_features(base_model, base_processor, raw_image, text: str):
+    """
+    Compute the same core features from the BASE (pre-trained) model.
+    """
+    device = next(base_model.parameters()).device
+    image  = _load_image(raw_image)
+    inputs, prompt_len = _prepare_inputs(base_processor, image, text, device)
+    feats = _compute_loss_features(base_model, base_processor, inputs, prompt_len)
+
+    # Prefix with "ref_" to distinguish from target model
+    return {f"ref_{k}": v for k, v in feats.items()}
+
+
+def compute_comparative_features(target_feats: dict, ref_feats: dict) -> dict:
+    """
+    Compute difference / ratio features between fine-tuned and base model.
+
+    This is the primary signal for membership inference:
+    - Members → fine-tuned model has LOWER loss than base model
+    - Non-members → both models have SIMILAR loss
+    """
+    t_loss = target_feats["caption_loss"]
+    r_loss = ref_feats["ref_caption_loss"]
 
     return {
-        "loss":            loss,
-        "caption_loss":    caption_loss,
-        "mean_token_prob": mean_token_prob,
-        "min_token_prob":  min_token_prob,
-        "max_token_prob":  max_token_prob,
-        "std_token_prob":  std_token_prob,
-        "mean_entropy":    mean_entropy,
-        "top_k_mass":      top_k_mass,
-        "low_conf_ratio":  low_conf_ratio,
-        "min_k10_prob":    min_k10_prob,
-        "min_k20_prob":    min_k20_prob,
-        "min_k30_prob":    min_k30_prob,
-        "min_k10_pp":      min_k10_pp,
-        "min_k20_pp":      min_k20_pp,
-        "min_k30_pp":      min_k30_pp,
+        # Loss difference (members → negative)
+        "caption_loss_diff": t_loss - r_loss,
+
+        # Loss ratio (members → < 1.0)
+        "loss_ratio": t_loss / max(r_loss, 1e-10),
+
+        # Perplexity ratio
+        "perplexity_ratio": target_feats["caption_perplexity"] / max(
+            ref_feats["ref_caption_perplexity"], 1e-10
+        ),
+
+        # Token probability difference (members → positive)
+        "mean_prob_diff": target_feats["mean_token_prob"] - ref_feats["ref_mean_token_prob"],
+
+        # Min-K% difference
+        "min_k10_prob_diff": target_feats["min_k10_prob"] - ref_feats["ref_min_k10_prob"],
+        "min_k20_prob_diff": target_feats["min_k20_prob"] - ref_feats["ref_min_k20_prob"],
+
+        # Entropy difference (members → negative = lower entropy)
+        "mean_entropy_diff": target_feats["mean_entropy"] - ref_feats["ref_mean_entropy"],
     }

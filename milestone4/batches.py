@@ -4,28 +4,41 @@ import torch
 import pandas as pd
 from tqdm import tqdm
 
-from features import compute_vlm_features
+from features import compute_vlm_features, compute_reference_features, compute_comparative_features
 
 
 _EMPTY_ROW = {
-    "loss": float("inf"), "caption_loss": float("inf"),
-    "mean_token_prob": 0, "min_token_prob": 0, "max_token_prob": 0,
-    "std_token_prob": 0, "mean_entropy": 0, "top_k_mass": 0,
-    "low_conf_ratio": 0, "min_k10_prob": 0, "min_k20_prob": 0,
-    "min_k30_prob": 0, "min_k10_pp": 0, "min_k20_pp": 0, "min_k30_pp": 0,
+    # Target model features
+    "caption_loss": float("inf"), "caption_perplexity": 0, "caption_length": 0,
+    "mean_token_prob": 0, "std_token_prob": 0, "min_token_prob": 0,
+    "min_k10_prob": 0, "min_k20_prob": 0, "mean_entropy": 0,
+    # Reference model features
+    "ref_caption_loss": float("inf"), "ref_caption_perplexity": 0, "ref_caption_length": 0,
+    "ref_mean_token_prob": 0, "ref_std_token_prob": 0, "ref_min_token_prob": 0,
+    "ref_min_k10_prob": 0, "ref_min_k20_prob": 0, "ref_mean_entropy": 0,
+    # Comparative features
+    "caption_loss_diff": 0, "loss_ratio": 1.0, "perplexity_ratio": 1.0,
+    "mean_prob_diff": 0, "min_k10_prob_diff": 0, "min_k20_prob_diff": 0,
+    "mean_entropy_diff": 0,
 }
 
 
-def analyze_sample_batch(model, processor, samples):
+def analyze_sample_batch(model, processor, samples, base_model=None, base_processor=None):
     """
     Compute features for a list of (image, text, label, id) tuples.
-
-    Returns: DataFrame
+    If base_model is provided, also compute reference + comparative features.
     """
     results = []
     for image, text, label, sample_id in tqdm(samples, desc="Extracting features"):
         try:
             row = compute_vlm_features(model, processor, image, text)
+
+            if base_model is not None and base_processor is not None:
+                ref_feats = compute_reference_features(base_model, base_processor, image, text)
+                comp_feats = compute_comparative_features(row, ref_feats)
+                row.update(ref_feats)
+                row.update(comp_feats)
+
             row["label"] = label
             row["id"]    = sample_id
         except Exception as e:
@@ -37,15 +50,11 @@ def analyze_sample_batch(model, processor, samples):
     return pd.DataFrame(results)
 
 
-def process_dataset_in_batches(model, processor, df, has_labels=True, batch_size=200):
-    """
-    Process a split DataFrame in chunks for memory efficiency.
-
-    Args:
-        df: DataFrame with columns id, image, text, and optionally is_member.
-
-    Returns: DataFrame of features
-    """
+def process_dataset_in_batches(
+    model, processor, df, has_labels=True, batch_size=200,
+    base_model=None, base_processor=None
+):
+    """Process a split DataFrame in chunks for memory efficiency."""
     texts  = df["text"].tolist()
     images = df["image"].tolist()
     ids    = df["id"].tolist()
@@ -59,7 +68,10 @@ def process_dataset_in_batches(model, processor, df, has_labels=True, batch_size
         chunk = samples[i : i + batch_size]
         print(f"  Batch {i // batch_size + 1}/{(len(samples) - 1) // batch_size + 1}"
               f"  ({len(chunk)} samples)")
-        batch_df = analyze_sample_batch(model, processor, chunk)
+        batch_df = analyze_sample_batch(
+            model, processor, chunk,
+            base_model=base_model, base_processor=base_processor,
+        )
         all_results.append(batch_df)
 
         if torch.cuda.is_available():
@@ -67,23 +79,4 @@ def process_dataset_in_batches(model, processor, df, has_labels=True, batch_size
 
     result = pd.concat(all_results, ignore_index=True)
     print(f"Done. {len(result)} samples processed.")
-    return result
-
-
-def save_features(save_dir, features: dict):
-    """Save feature DataFrames to CSV files."""
-    os.makedirs(save_dir, exist_ok=True)
-    for name, df in features.items():
-        path = os.path.join(save_dir, f"{name}.csv")
-        df.to_csv(path, index=False)
-        print(f"Saved {name} → {path}")
-
-
-def load_features(save_dir) -> dict:
-    """Load feature DataFrames from CSV files."""
-    result = {}
-    for name in ("train", "val", "test"):
-        path = os.path.join(save_dir, f"{name}.csv")
-        result[name] = pd.read_csv(path)
-        print(f"Loaded {name}: {result[name].shape}")
     return result
