@@ -2,7 +2,7 @@ import torch
 from datasets import load_dataset
 from transformers import AutoProcessor, SmolVLMForConditionalGeneration
 
-from config import MODEL_ID, DATASET_ID
+from config import MODEL_ID, BASE_MODEL_ID, DATASET_ID
 
 
 def get_model_dtype(device: torch.device) -> torch.dtype:
@@ -11,23 +11,17 @@ def get_model_dtype(device: torch.device) -> torch.dtype:
     return torch.float32
 
 
-def load_model_and_processor(device: torch.device):
-    """
-    Load the fine-tuned VLM and its processor.
-
-    Returns: processor, model
-    """
+def _load_vlm(model_id: str, device: torch.device):
+    """Load a SmolVLM model + processor by HuggingFace ID."""
     model_dtype = get_model_dtype(device)
     print(f"Using dtype: {model_dtype}")
 
-    processor = AutoProcessor.from_pretrained(MODEL_ID)
+    processor = AutoProcessor.from_pretrained(model_id)
     processor.image_processor.do_image_splitting = False
-    processor.image_processor.size = {"longest_edge": 512}
-    processor.image_processor.max_image_size = {"longest_edge": 512}
 
-    print(f"Loading model: {MODEL_ID}")
+    print(f"Loading model: {model_id}")
     model = SmolVLMForConditionalGeneration.from_pretrained(
-        MODEL_ID,
+        model_id,
         torch_dtype=model_dtype,
         _attn_implementation="sdpa",
         trust_remote_code=True,
@@ -35,6 +29,16 @@ def load_model_and_processor(device: torch.device):
 
     print("Model loaded.")
     return processor, model
+
+
+def load_model_and_processor(device: torch.device):
+    """Load the fine-tuned VLM and its processor."""
+    return _load_vlm(MODEL_ID, device)
+
+
+def load_base_model_and_processor(device: torch.device):
+    """Load the base (pre-trained) SmolVLM for reference comparison."""
+    return _load_vlm(BASE_MODEL_ID, device)
 
 
 def load_data():
