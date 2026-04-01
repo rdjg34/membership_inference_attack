@@ -6,7 +6,7 @@ from sklearn.preprocessing import StandardScaler
 from xgboost import XGBClassifier
 
 
-# ─── Helpers ────────────────────────────────────────────────────────────────────
+#Helper Functions
 
 def _clean(X: pd.DataFrame, medians=None):
     X = X.replace([np.inf, -np.inf], np.nan)
@@ -26,11 +26,12 @@ def _get_feature_cols(df: pd.DataFrame) -> list:
     return cols
 
 
-# ─── Main Builder ───────────────────────────────────────────────────────────────
-
+#Main Classifier Builder
 def build_membership_classifier(train_df: pd.DataFrame, val_df: pd.DataFrame) -> dict:
     """
-    Simple baseline: Logistic Regression + XGBoost on all available features.
+    Trains Logistic Regression, XGBoost, and a simple average ensemble on all available features.
+    Returns a dict of results keyed by model name, each containing the classifier, scaler,
+    feature columns, medians, validation AUC, TPR@FPR=0.1, and val probabilities.
     """
     y_train = train_df["label"]
     y_val = val_df["label"]
@@ -60,11 +61,11 @@ def build_membership_classifier(train_df: pd.DataFrame, val_df: pd.DataFrame) ->
     X_train_sc = scaler.fit_transform(X_train_raw)
     X_val_sc = scaler.transform(X_val_raw)
 
-    # ── Train classifiers ────────────────────────────────────────────────────
+    # Train Classifiers
     results = {}
     val_probas = {}
 
-    # 1. Logistic Regression (simple baseline)
+    # Logistic Regression (simple baseline)
     print("\nTraining Logistic Regression...")
     lr = LogisticRegression(
         random_state=42, max_iter=5000,
@@ -85,7 +86,7 @@ def build_membership_classifier(train_df: pd.DataFrame, val_df: pd.DataFrame) ->
     }
     val_probas["Logistic Regression"] = lr_proba
 
-    # 2. XGBoost
+    #  XGBoost
     print("\nTraining XGBoost...")
     xgb = XGBClassifier(
         n_estimators=500, learning_rate=0.01, max_depth=3,
@@ -114,7 +115,7 @@ def build_membership_classifier(train_df: pd.DataFrame, val_df: pd.DataFrame) ->
     }
     val_probas["XGBoost"] = xgb_proba
 
-    # 3. Simple average ensemble
+    # Simple average ensemble
     print("\nBuilding ensemble (simple average)...")
     ens_proba = (lr_proba + xgb_proba) / 2
     ens_auc = roc_auc_score(y_val, ens_proba)
@@ -130,7 +131,7 @@ def build_membership_classifier(train_df: pd.DataFrame, val_df: pd.DataFrame) ->
         "sub_results": {n: results[n] for n in ["Logistic Regression", "XGBoost"]},
     }
 
-    # ── Summary ─────────────────────────────────────────────────────────────
+    # Print Summary
     print("\n── Summary ──")
     for name, r in results.items():
         print(f"{name:25s}  AUC={r['auc']:.4f}  TPR@FPR=0.1={r['tpr_at_fpr01']:.4f}")
@@ -141,7 +142,7 @@ def build_membership_classifier(train_df: pd.DataFrame, val_df: pd.DataFrame) ->
     return results
 
 
-# ─── Prediction ─────────────────────────────────────────────────────────────────
+# Make Predictions
 
 def _predict(clf_result: dict, X: pd.DataFrame) -> np.ndarray:
     """Generate probabilities from a single classifier result dict."""
@@ -168,6 +169,7 @@ def _predict(clf_result: dict, X: pd.DataFrame) -> np.ndarray:
         return clf_result["classifier"].predict_proba(X_raw.values)[:, 1]
 
 
+#Generate the Kaggle submission file
 def generate_submission(
     test_df: pd.DataFrame,
     features_df: pd.DataFrame,

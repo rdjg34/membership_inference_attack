@@ -156,7 +156,7 @@ def compute_vlm_features(model, processor, raw_image, text: str):
 
 def compute_reference_features(base_model, base_processor, raw_image, text: str):
     """
-    Compute the same core features from the BASE (pre-trained) model.
+    Compute the same core features from the BASE (reference) model.
     """
     device = next(base_model.parameters()).device
     image  = _load_image(raw_image)
