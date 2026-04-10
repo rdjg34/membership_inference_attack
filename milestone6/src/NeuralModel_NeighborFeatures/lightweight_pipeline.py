@@ -4,10 +4,51 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score
 from sklearn.preprocessing import StandardScaler
-from xgboost import XGBClassifier
+
+try:
+    from xgboost import XGBClassifier  # type: ignore
+    XGB_BACKEND = "xgboost"
+except Exception as xgb_import_error:
+    XGB_BACKEND = "hist_gradient_boosting"
+
+    class XGBClassifier:  # fallback shim
+        def __init__(self, n_estimators=100, learning_rate=0.1, max_depth=3, min_child_weight=1,
+                     random_state=42, **kwargs):
+            self.model = HistGradientBoostingClassifier(
+                max_iter=n_estimators,
+                learning_rate=learning_rate,
+                max_depth=max_depth,
+                min_samples_leaf=max(2, int(min_child_weight)),
+                random_state=random_state,
+            )
+
+        def fit(self, X, y):
+            self.model.fit(X, y)
+            self.classes_ = getattr(self.model, "classes_", np.array([0, 1]))
+            return self
+
+        def predict_proba(self, X):
+            return self.model.predict_proba(X)
+
+    print(f"Warning: xgboost is unavailable ({xgb_import_error}); using sklearn HistGradientBoosting fallback.")
+
+HERE = Path(__file__).resolve().parent
+
+
+def _default_data_root() -> Path:
+    candidates = [
+        HERE / "data" / "extracted_features",
+        HERE / "extracted_features",
+        HERE.parents[1] / "data" / "extracted_features",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[-1]
 
 
 FAMILIES = {
@@ -82,7 +123,7 @@ def clean_matrix(train_df: pd.DataFrame, other_df: pd.DataFrame, feature_cols: l
     return X_train, X_other, medians
 
 
-def choose_feature_cols(train_df: pd.DataFrame, val_df: pd.DataFrame, max_features: int = 100) -> list[str]:
+def choose_feature_cols(train_df: pd.DataFrame, max_features: int = 100) -> list[str]:
     candidates = [
         c for c in train_df.columns
         if c not in {"id", "label"} and pd.api.types.is_numeric_dtype(train_df[c]) and train_df[c].nunique() > 1
@@ -90,7 +131,7 @@ def choose_feature_cols(train_df: pd.DataFrame, val_df: pd.DataFrame, max_featur
     ranked = []
     for col in candidates:
         try:
-            auc = roc_auc_score(val_df["label"], val_df[col])
+            auc = roc_auc_score(train_df["label"], train_df[col])
             ranked.append((max(auc, 1.0 - auc), col))
         except Exception:
             continue
@@ -147,7 +188,7 @@ class RoutedBlend:
         return out
 
     def fit(self, train_df: pd.DataFrame, val_df: pd.DataFrame):
-        self.feature_cols = choose_feature_cols(train_df, val_df)
+        self.feature_cols = choose_feature_cols(train_df)
         X_train, X_val, self.medians = clean_matrix(train_df, val_df, self.feature_cols)
         y_train = train_df["label"].values
         y_val = val_df["label"].values
@@ -309,7 +350,7 @@ def run_pipeline(data_root: Path, output_dir: Path):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data-root", type=Path, default=Path("../../milestone6/data/extracted_features"))
-    parser.add_argument("--output-dir", type=Path, default=Path("../output"))
+    parser.add_argument("--data-root", type=Path, default=_default_data_root())
+    parser.add_argument("--output-dir", type=Path, default=HERE)
     args = parser.parse_args()
-    run_pipeline(args.data_root, args.output_dir)
+    run_pipeline(args.data_root.resolve(), args.output_dir.resolve())

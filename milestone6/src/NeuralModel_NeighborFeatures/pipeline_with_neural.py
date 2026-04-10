@@ -24,8 +24,23 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import roc_auc_score
 
+HERE = Path(__file__).resolve().parent
+
+
+def _default_data_root() -> Path:
+    candidates = [
+        HERE / "data" / "extracted_features",
+        HERE / "extracted_features",
+        HERE.parents[1] / "data" / "extracted_features",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[-1]
+
+
 # lightweight_pipeline.py lives in the same directory as this file
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(HERE))
 from lightweight_pipeline import merge_splits, add_id_features, RoutedBlend
 from mlp_classifier import build_stacking_mlp, predict_stacking_mlp
 
@@ -50,23 +65,33 @@ def _merge_neighbor(family_df: pd.DataFrame, neighbor_df: pd.DataFrame) -> pd.Da
 
 
 def run_pipeline(data_root: Path, neighbor_dir: Path, output_dir: Path):
-    # ── 1. Load teammate's three family CSVs ──────────────────────────────────
+    data_root = data_root.resolve()
+    neighbor_dir = neighbor_dir.resolve()
+    output_dir = output_dir.resolve()
+
+    if not data_root.exists():
+        raise FileNotFoundError(
+            f"Could not find extracted feature CSVs at '{data_root}'. "
+            "Pass --data-root to the folder containing 1_temperature/, 2_renyi/, and 3_img_pert/."
+        )
+
+    # Load extracted files three family CSVs
     train = merge_splits(data_root, "train")
     val   = merge_splits(data_root, "val")
     test  = merge_splits(data_root, "test")
 
-    # ── 2. Load and attach neighbor features ──────────────────────────────────
+    # Load and attach neighbor features 
     train = _merge_neighbor(train, load_neighbor_features(neighbor_dir, "train"))
     val   = _merge_neighbor(val,   load_neighbor_features(neighbor_dir, "val"))
     test  = _merge_neighbor(test,  load_neighbor_features(neighbor_dir, "test"))
 
     print(f"Feature count after merge: {train.shape[1] - 2}")
 
-    # ── 3. ID-based target-encoding features ──────────────────────────────────
+    # ID-based target-encoding features
     train, val  = add_id_features(train, val)
     train, test = add_id_features(train, test)
 
-    # ── 4. RoutedBlend (LR + XGBoost + per-source XGBoost) ───────────────────
+    #  RoutedBlend (LR + XGBoost + per-source XGBoost) 
     print("\n── RoutedBlend ──")
     routed = RoutedBlend()
     routed_metrics = routed.fit(train, val)
@@ -75,7 +100,7 @@ def run_pipeline(data_root: Path, neighbor_dir: Path, output_dir: Path):
     routed_auc = float(roc_auc_score(val["label"], val_routed))
     print(f"RoutedBlend val AUC: {routed_auc:.4f}")
 
-    # ── 5. MLP stacking meta-learner ──────────────────────────────────────────
+    #  MLP stacking meta-learner 
     print("\n── MLP Stacking ──")
     stacking = build_stacking_mlp(train, val)
     val_mlp   = stacking["val_proba"]
@@ -83,7 +108,7 @@ def run_pipeline(data_root: Path, neighbor_dir: Path, output_dir: Path):
     mlp_auc   = stacking["auc"]
     print(f"MLP stacking val AUC: {mlp_auc:.4f}  TPR@FPR=0.1: {stacking['tpr_at_fpr01']:.4f}")
 
-    # ── 6. Pick the better model ───────────────────────────────────────────────
+    #  Pick the better model 
     if mlp_auc > routed_auc:
         best_name = "mlp_stacking"
         val_pred  = val_mlp
@@ -96,7 +121,7 @@ def run_pipeline(data_root: Path, neighbor_dir: Path, output_dir: Path):
     best_auc = float(roc_auc_score(val["label"], val_pred))
     print(f"\nBest model: {best_name}  (val AUC={best_auc:.4f})")
 
-    # ── 7. Save outputs ───────────────────────────────────────────────────────
+    #  Save outputs 
     output_dir.mkdir(parents=True, exist_ok=True)
 
     metrics = {
@@ -127,16 +152,16 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Neural + neighbor MIA pipeline (CPU)")
     parser.add_argument(
         "--data-root", type=Path,
-        default=Path(__file__).parent / ".." / ".." / "milestone6" / "data" / "extracted_features",
-        help="Root dir containing 1_temperature/, 2_renyi/, 3_img_pert/",
+        default=_default_data_root(),
+        help="Root dir containing 1_temperature/, 2_renyi/, 3_img_pert/ (auto-detected by default)",
     )
     parser.add_argument(
-        "--neighbor-dir", type=Path, default=Path(__file__).parent,
-        help="Dir containing *_neighbor_only.csv files (default: same dir as this script)",
+        "--neighbor-dir", type=Path, default=HERE,
+        help="Dir containing *_neighbor_only.csv files (default: this folder)",
     )
     parser.add_argument(
-        "--output-dir", type=Path, default=Path(__file__).parent / ".." / "output",
-        help="Where to write metrics.json, val_predictions.csv, submission.csv",
+        "--output-dir", type=Path, default=HERE,
+        help="Where to write metrics.json, val_predictions.csv, submission.csv (default: this folder)",
     )
     args = parser.parse_args()
     run_pipeline(

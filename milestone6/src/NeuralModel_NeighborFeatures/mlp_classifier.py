@@ -26,14 +26,41 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
+from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score, roc_curve
 from sklearn.model_selection import StratifiedKFold
 from sklearn.preprocessing import StandardScaler
-from xgboost import XGBClassifier
+
+try:
+    from xgboost import XGBClassifier  # type: ignore
+    XGB_BACKEND = "xgboost"
+except Exception as xgb_import_error:
+    XGB_BACKEND = "hist_gradient_boosting"
+
+    class XGBClassifier:  # fallback shim
+        def __init__(self, n_estimators=100, learning_rate=0.1, max_depth=3, min_child_weight=1,
+                     random_state=42, **kwargs):
+            self.model = HistGradientBoostingClassifier(
+                max_iter=n_estimators,
+                learning_rate=learning_rate,
+                max_depth=max_depth,
+                min_samples_leaf=max(2, int(min_child_weight)),
+                random_state=random_state,
+            )
+
+        def fit(self, X, y):
+            self.model.fit(X, y)
+            self.classes_ = getattr(self.model, "classes_", np.array([0, 1]))
+            return self
+
+        def predict_proba(self, X):
+            return self.model.predict_proba(X)
+
+    print(f"Warning: xgboost is unavailable ({xgb_import_error}); using sklearn HistGradientBoosting fallback.")
 
 
-# ── helpers (shared with classifier.py) ───────────────────────────────────────
+# helpers (shared with classifier.py)
 
 def _clean(X: pd.DataFrame, medians=None):
     X = X.replace([np.inf, -np.inf], np.nan)
@@ -53,7 +80,7 @@ def _get_feature_cols(df: pd.DataFrame) -> list[str]:
     return cols
 
 
-# ── tiny MLP ──────────────────────────────────────────────────────────────────
+# small MLP 
 
 class StackingMLP(nn.Module):
     """
@@ -82,7 +109,7 @@ class StackingMLP(nn.Module):
         return self.net(x).squeeze(1)   # (B,)
 
 
-# ── stage 1: out-of-fold stacking ─────────────────────────────────────────────
+#  stage 1: out-of-fold stacking 
 
 def _make_base_classifiers(pos_weight: float):
     """Return fresh LR and XGBoost instances."""
@@ -129,7 +156,7 @@ def _generate_oof_probabilities(
     return oof
 
 
-# ── stage 2: MLP training 
+# stage 2: MLP training 
 def _train_mlp(
     X_meta_train: np.ndarray,   # (n_train, 2)  OOF probabilities
     y_train: np.ndarray,
@@ -189,7 +216,7 @@ def _train_mlp(
     return model
 
 
-# ── public API ────────────────────────────────────────────────────────────────
+#  public API 
 
 def build_stacking_mlp(
     train_df: pd.DataFrame,
@@ -237,7 +264,7 @@ def build_stacking_mlp(
 
     pos_weight = float((y_train == 0).sum()) / max(1, int((y_train == 1).sum()))
 
-    # ── Stage 1: OOF probabilities for meta-learner training ──────────────────
+    #  Stage 1: OOF probabilities for meta-learner training 
     print(f"\nGenerating OOF probabilities ({n_splits} folds)...")
     oof_probs = _generate_oof_probabilities(
         X_train_sc, X_train_raw.values, y_train, pos_weight, n_splits
@@ -246,7 +273,7 @@ def build_stacking_mlp(
     oof_auc_xgb = roc_auc_score(y_train, oof_probs[:, 1])
     print(f"  OOF AUC — LR: {oof_auc_lr:.4f}  XGB: {oof_auc_xgb:.4f}")
 
-    # ── Stage 1: full base models for val/test scoring ─────────────────────────
+    #  Stage 1: full base models for val/test scoring 
     print("\nTraining full base models on all training data...")
     lr_full, xgb_full = _make_base_classifiers(pos_weight)
     lr_full.fit(X_train_sc, y_train)
@@ -259,7 +286,7 @@ def build_stacking_mlp(
     val_auc_xgb = roc_auc_score(y_val, val_xgb_proba)
     print(f"  Val AUC  — LR: {val_auc_lr:.4f}  XGB: {val_auc_xgb:.4f}")
 
-    # ── Stage 2: MLP meta-learner ──────────────────────────────────────────────
+    #  Stage 2: MLP meta-learner 
     print("\nTraining MLP meta-learner...")
     X_meta_val = np.column_stack([val_lr_proba, val_xgb_proba])
     mlp = _train_mlp(oof_probs, y_train, X_meta_val, y_val)

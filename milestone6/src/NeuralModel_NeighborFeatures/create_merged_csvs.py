@@ -18,8 +18,8 @@ import argparse
 import csv
 from pathlib import Path
 
-HERE = Path(__file__).parent
-DEFAULT_DATA_ROOT = HERE / ".." / ".." / "milestone6" / "data" / "extracted_features"
+HERE = Path(__file__).resolve().parent
+DEFAULT_DATA_ROOT = HERE.parents[1] / "data" / "extracted_features"
 
 FAMILIES = {
     "temp":  "1_temperature",
