@@ -9,7 +9,7 @@ This file was generateed by Claude
 ## Directory structure
 
 ```
-Neural_and_Neighbors/
+NeuralModel_NeighborFeatures
   
     config.py               Global constants (model IDs, dataset ID, Renyi config)
     models.py               Loads fine-tuned and base SmolVLM models from HuggingFace
@@ -24,23 +24,24 @@ Neural_and_Neighbors/
     train_neighbor_only.csv Pre-extracted neighbor features 
     val_neighbor_only.csv
     test_neighbor_only.csv
-  output/                   Generated outputs go here
+    metrics_viewer.ipynb   Displays models' AUC and TPR@FPR=0.1 results
+    
+    
+    ##Generated outputs
+    
     submission.csv
     val_predictions.csv
     metrics.json
+
 ```
 
 ## How to run
 
-### Prerequisites
 
-```bash
-pip install pandas numpy scikit-learn xgboost torch
-```
 
 ### Run the pipeline (CPU, no GPU needed)
 
-From `src/`:
+
 
 ```bash
 python pipeline_with_neural.py
@@ -48,7 +49,7 @@ python pipeline_with_neural.py
 
 Or open `run_pipeline.ipynb` and run all cells.
 
-Outputs are written to `output/`.
+
 
 ### Optional: inspect merged features
 
