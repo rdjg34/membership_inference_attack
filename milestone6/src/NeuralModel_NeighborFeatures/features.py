@@ -5,6 +5,8 @@ import torch.nn.functional as F
 from PIL import Image
 from config import RENYI_ALPHAS, RENYI_K_PERCENTS
 
+#Help from Claude
+
 
 def _load_image(raw_image) -> Image.Image:
     if isinstance(raw_image, dict) and "bytes" in raw_image:

@@ -1,13 +1,15 @@
 """
 pipeline_with_neural.py
 =======================
+#Help from Claude on design and implementation
+
+
 Full CPU pipeline combining teammate's three family CSVs with neighbor features
 and the MLP stacking meta-learner.
 
-Changes from milestone6:
+
   - max_features raised from 80 → 100 (see lightweight_pipeline.py)
-  - nb__loss_std_vs_neighbors added as a new neighbor feature
-  - lightweight_pipeline.py is in the same directory — no path hacks needed
+  - uses lightweight_pipeline.py is in the same directory — no path hacks needed
 
 Usage (from src/):
     python pipeline_with_neural.py

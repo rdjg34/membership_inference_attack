@@ -1,8 +1,8 @@
 {
   "feature_count": 233,
   "routed_blend_auc": 0.8444092592592592,
-  "mlp_stacking_auc": 0.8221611111111112,
-  "mlp_tpr_at_fpr01": 0.21,
+  "mlp_stacking_auc": 0.821575925925926,
+  "mlp_tpr_at_fpr01": 0.21666666666666667,
   "best_model": "routed_blend",
   "best_val_auc": 0.8444092592592592,
   "routed_details": {

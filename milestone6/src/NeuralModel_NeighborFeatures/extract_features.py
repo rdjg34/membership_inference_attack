@@ -7,10 +7,6 @@ GPU step: runs VLM feature extraction for all dataset splits and saves
 NOTE: The *_neighbor_only.csv files from milestone6 are already copied here.
 Re-run this script only if you want to regenerate them (requires GPU + HuggingFace access).
 
-Changes from milestone6 version:
-  - n_neighbors default raised from 7 → 15 for finer percentile granularity
-    and a more stable loss_std_vs_neighbors estimate.
-  - loss_std_vs_neighbors added as a new neighbor feature (see batches.py).
 
 Usage:
     python extract_features.py

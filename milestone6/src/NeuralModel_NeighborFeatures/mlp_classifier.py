@@ -15,9 +15,7 @@ Why stacking rather than a raw-feature MLP?
   - The meta-learner only sees 2 inputs (LR prob, XGB prob), so it cannot overfit badly.
   - It is interpretable: we can see which base model the MLP learns to up-weight.
 
-Expected gain at 0.78 AUC: modest (+0.01–0.03). The bottleneck is feature quality,
-not the classifier. Use this alongside the existing build_membership_classifier()
-results to see whether stacking helps for your specific feature set.
+
 
 Implemented with guidance from Claude AI.
 """
