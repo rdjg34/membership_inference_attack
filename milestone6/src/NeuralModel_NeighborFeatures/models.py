@@ -1,0 +1,70 @@
+import torch
+from datasets import load_dataset
+from transformers import AutoProcessor, SmolVLMForConditionalGeneration
+
+from config import MODEL_ID, BASE_MODEL_ID, DATASET_ID
+
+#Conceived and implemented with help from Claude
+
+
+def get_model_dtype(device: torch.device) -> torch.dtype:
+    if device.type == "cuda" and torch.cuda.is_bf16_supported():
+        return torch.bfloat16
+    return torch.float32
+
+
+def _load_vlm(model_id: str, device: torch.device):
+    """Load a SmolVLM model + processor by HuggingFace ID."""
+    model_dtype = get_model_dtype(device)
+    print(f"Using dtype: {model_dtype}")
+
+    try:
+        processor = AutoProcessor.from_pretrained(model_id)
+    except ValueError:
+        # Fine-tuned checkpoints sometimes lack a complete processor config.
+        # Fall back to the base model's processor — it's identical for SmolVLM fine-tunes.
+        print(f"  Processor not found in {model_id}, loading from base: {BASE_MODEL_ID}")
+        processor = AutoProcessor.from_pretrained(BASE_MODEL_ID)
+    processor.image_processor.do_image_splitting = False
+
+    print(f"Loading model: {model_id}")
+    model = SmolVLMForConditionalGeneration.from_pretrained(
+        model_id,
+        torch_dtype=model_dtype,
+        _attn_implementation="sdpa",
+        trust_remote_code=True,
+    ).to(device).eval()
+
+    print("Model loaded.")
+    return processor, model
+
+
+def load_model_and_processor(device: torch.device):
+    """Load the fine-tuned VLM and its processor."""
+    return _load_vlm(MODEL_ID, device)
+
+
+def load_base_model_and_processor(device: torch.device):
+    """Load the base (pre-trained) SmolVLM for reference comparison."""
+    return _load_vlm(BASE_MODEL_ID, device)
+
+
+def load_data():
+    """
+    Load dataset splits as DataFrames.
+
+    Returns: dict with keys 'train', 'validation', 'test'
+    """
+    print(f"Loading dataset: {DATASET_ID}")
+    dataset = load_dataset(DATASET_ID)
+    splits = {
+        "train":      dataset["train"].to_pandas(),
+        "validation": dataset["validation"].to_pandas(),
+        "test":       dataset["test"].to_pandas(),
+    }
+    train_df = splits["train"]
+    val_df   = splits["validation"]
+    print(f"Train:      {len(train_df)} samples  ({int(train_df['is_member'].sum())} members)")
+    print(f"Validation: {len(val_df)} samples  ({int(val_df['is_member'].sum())} members)")
+    print(f"Test:       {len(splits['test'])} samples")
+    return splits
