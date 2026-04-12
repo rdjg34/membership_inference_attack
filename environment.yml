@@ -14,5 +14,14 @@ dependencies:
   - nltk
   - datasets
   - transformers
-  - pytorch
   - tabulate
+  - scikit-learn
+  - xgboost
+  - pillow
+  - tqdm
+  - num2words
+- pip
+  - pip:
+    - torch
+    - safetensors
+    - accelerate
