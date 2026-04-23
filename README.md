@@ -1,32 +1,6 @@
-# COLX_531_TCOB
-
-## Milestone 1
-
-| Document | Location |
-|----------------------|-------------------|
-| Teamwork Contract | [`milestone1/teamwork_contract_531.md`](milestone1/teamwork_contract_531.md) |
-| Data Inspection| code: [`src/data_inspection.py`](src/data_inspection.py) <br> analysis: [`milestone1/data_inspection.md`](milestone1/data_inspection.md)|
- Exploratory Data Analysis - Lab 3 | [`src/Lab3_EDA.ipynb`](src/Lab3_EDA.ipynb)  |
-| Kaggle Submission | [`milestone1/tcob_lab3_submission.csv`](milestone1/tcob_lab3_submission.csv) |
-| Baseline Model | [`src/COLX_531_Lab3.ipynb`](src/COLX_531_Lab3.ipynb) |
-| Report | [`milestone1/Team_5_TCOB_milestone_1_submission.pdf`](milestone1/Team_5_TCOB_milestone_1_submission.pdf) |
-
-
-
-## Milestone 2
-| Document | Location |
-|----------------------|-------------------|
-| ...| *(add link)* |
-  |   |
-|  |  |
-
-## Milestone 3
-| Document | Location |
-|----------------------|-------------------|
-| Report | [`milestone3/TCOB_Milestone_3.pdf`](milestone3/TCOB_Milestone_3.pdf) |
- Final Kaggle Submission | [`milestone3/membership_inference_submission_TCOB_model6_run2.csv`](milestone3/membership_inference_submission_TCOB_model6_run2.csv)  |
-| Model 5 source code | [`src/model5`](src/model5)  |
-| Model 6 source code | [`src/model6`](src/model6)   |
+# Membership Inference Attack  
+This repository contains the group project work completed for COLX 531 and COLX 585 for the completion of the Master of Data Science in Computational Linguistics at UBC. All credit for project origins to Jian Zhu at UBC.  
+The work in this project was completed by Jennifer Flake, Rachelle De Jager, Yucai Zhong, and Christina McCallum.  
 
 ## Conda environment setup
 
